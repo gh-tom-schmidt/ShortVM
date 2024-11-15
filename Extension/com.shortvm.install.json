@@ -1,0 +1,9 @@
+{
+  "name": "com.shortvm.install",
+  "description": "Install a VM from url",
+  "path": "/home/user/ShortVM/FireScript.sh",
+  "type": "stdio",
+   "allowed_extensions": [
+        "...@temporary-addon"
+   ]
+}
