@@ -1,0 +1,59 @@
+#!/bin/bash
+
+set -e
+
+OUTPUT_DIR="/home/user/Backups"
+IMAGE_NAME="$OUTPUT_DIR/arch_backup.qcow2"
+IMAGE_SIZE="40G"
+NBD_DEVICE="/dev/nbd0"
+MOUNT_DIR="/mnt/backup"
+
+# check if script is run as root
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root." >&2
+  exit 1
+fi
+
+# create disk
+qemu-img create -f qcow2 $IMAGE_NAME $IMAGE_SIZE
+# has to be changed for other users
+sudo chown user:user $IMAGE_NAME
+
+# connect the image as a block device
+sudo modprobe nbd
+sudo qemu-nbd --connect=$NBD_DEVICE $IMAGE_NAME
+
+# partition and format the image
+sudo parted $NBD_DEVICE --script mklabel gpt
+# Create EFI partition
+sudo parted $NBD_DEVICE --script mkpart primary fat32 1MiB 512MiB
+sudo parted $NBD_DEVICE --script set 1 esp on
+sudo mkfs.fat "${NBD_DEVICE}p1"
+# Create root partition
+sudo parted $NBD_DEVICE --script mkpart primary ext4 512MiB 100%
+sudo mkfs.ext4 "${NBD_DEVICE}p2"
+
+# mount
+sudo mkdir -p $MOUNT_DIR
+sudo mount "${NBD_DEVICE}p2" $MOUNT_DIR
+sudo mkdir -p $MOUNT_DIR/boot/efi
+sudo mount "${NBD_DEVICE}p1" $MOUNT_DIR/boot/efi
+
+# copy system, exclude system specific stuff
+sudo rsync -aAXv /* $MOUNT_DIR --exclude={"/backup","/nbd0p1","/mnt/*","/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/media/*","lost+found","/home/user/Backups/*"}
+
+# configure the bootloader
+sudo mount --bind /dev $MOUNT_DIR/dev
+sudo mount --bind /proc $MOUNT_DIR/proc
+sudo mount --bind /sys $MOUNT_DIR/sys
+
+sudo chroot $MOUNT_DIR /bin/bash <<EOF
+mount /boot/efi
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=arch_backup
+grub-mkconfig -o /boot/grub/grub.cfg
+EOF
+
+# clean
+sudo umount -R $MOUNT_DIR
+sudo qemu-nbd --disconnect $NBD_DEVICE
+sudo rmdir $MOUNT_DIR
